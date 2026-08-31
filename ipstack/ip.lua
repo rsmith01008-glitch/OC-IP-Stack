@@ -1,10 +1,20 @@
 -- ipstack.ip: IP-like addressing, routing, and fragmentation/reassembly.
 --
 -- Addressing is a deliberate simplification versus real IPv4: a 2-octet
--- "subnet.host" address (each 0-255), giving 255 subnets x 254 usable
--- hosts -- far beyond any plausible OpenComputers network, at half the
--- per-packet address overhead of 4-octet addressing. The wire format is
--- centralized here (IP_HDR_FMT) so widening it later is a one-file change.
+-- "subnet.host" address (each 0-255). The wire format is centralized here
+-- (IP_HDR_FMT) so widening it later is a one-file change.
+--
+-- Subnet 255 (ip.MULTICAST_SUBNET) is reserved to mean "this is a
+-- multicast group address" -- mirroring how real IPv4 reserves
+-- 224.0.0.0/4 -- with the host byte (0-255) as the group id, giving up to
+-- 256 groups at the cost of dropping usable unicast subnets from 255 to
+-- 254. There is no membership-signaling protocol (no IGMP-equivalent):
+-- join/leave (see ipstack.multicast) are pure local software state, never
+-- announced on the wire. A multicast destination is recognized (and
+-- reassembled/dispatched) before the unicast isLocalAddress/forwarding
+-- logic ever runs -- see ip.handleFrame -- so it is never relayed across
+-- a relay node's other interfaces even with cfg.ip.forwarding = true; a
+-- multicast flood never leaves the broadcast domain it originated on.
 --
 -- Like eth.lua, this module never requires ipstack.tcp/ipstack.udp
 -- directly (that would create a require() cycle, since tcp/udp require ip
@@ -49,6 +59,12 @@ function ip.isLocalAddress(addr)
     if iface.ip and util.ipEquals(iface.ip, addr) then return true end
   end
   return false
+end
+
+ip.MULTICAST_SUBNET = 255
+
+function ip.isMulticast(addr)
+  return addr ~= nil and addr.subnet == ip.MULTICAST_SUBNET
 end
 
 -- Effective IP-layer MTU for a local interface: the modem's own
@@ -166,24 +182,16 @@ end
 
 --- Sending ------------------------------------------------------------
 
--- Sends `payload` (an already-encoded L4 segment/datagram) to dstIp,
--- fragmenting across multiple IP-like packets if it doesn't fit the
--- outbound interface's MTU. Returns true, or nil, err.
-function ip.send(dstIp, protocol, payload)
-  local ifaceAddr, nextHopIp = ip.lookupRoute(dstIp)
-  if not ifaceAddr then return nil, nextHopIp end
-
+-- Fragments `payload` across MTU-sized IP-like packets and sends them out
+-- `ifaceAddr` to `mac`, stamping that interface's own address as srcIp.
+-- Verbatim lift of ip.send's original (pre-multicast) fragmentation loop,
+-- factored out so it can be called once for a unicast send or once per
+-- local interface for a multicast flood, without duplicating it.
+local function sendFragmented(ifaceAddr, mac, dstIp, protocol, ttl, payload)
   local iface = core.state.interfaces[ifaceAddr]
-  local mac, err = eth.arp.resolve(nextHopIp)
-  if not mac then return nil, err end
-
-  local cfg = core.state.config or {}
-  local ttl = (cfg.ip and cfg.ip.defaultTtl) or 32
   local mtu = ip.MTU(ifaceAddr)
   local maxChunk = mtu - IP_HDR_LEN
   if maxChunk < 1 then return nil, "interface MTU too small" end
-
-  payload = payload or ""
 
   if #payload <= maxChunk then
     local header = packHeader(iface.ip, dstIp, ttl, protocol, allocFragId(), 0, 0, #payload)
@@ -203,6 +211,40 @@ function ip.send(dstIp, protocol, payload)
     offset = offset + chunkLen
   end
   return true
+end
+
+-- Sends `payload` (an already-encoded L4 segment/datagram) to dstIp,
+-- fragmenting across multiple IP-like packets if it doesn't fit the
+-- outbound interface's MTU. Returns true, or nil, err.
+--
+-- A multicast dstIp (ip.isMulticast) has no single MAC to resolve -- there
+-- is no routing/ARP step at all, it floods out every local interface
+-- (eth.BROADCAST_MAC), each fragmenting independently against its own
+-- MTU. Everything else is the original unicast path, unchanged.
+function ip.send(dstIp, protocol, payload)
+  payload = payload or ""
+  local cfg = core.state.config or {}
+  local ttl = (cfg.ip and cfg.ip.defaultTtl) or 32
+
+  if ip.isMulticast(dstIp) then
+    local sentAny, lastErr = false, "no local interfaces to send multicast on"
+    for ifaceAddr, iface in pairs(core.state.interfaces) do
+      if iface.ip then
+        local ok, err = sendFragmented(ifaceAddr, eth.BROADCAST_MAC, dstIp, protocol, ttl, payload)
+        if ok then sentAny = true else lastErr = err end
+      end
+    end
+    if sentAny then return true end
+    return nil, lastErr
+  end
+
+  local ifaceAddr, nextHopIp = ip.lookupRoute(dstIp)
+  if not ifaceAddr then return nil, nextHopIp end
+
+  local mac, err = eth.arp.resolve(nextHopIp)
+  if not mac then return nil, err end
+
+  return sendFragmented(ifaceAddr, mac, dstIp, protocol, ttl, payload)
 end
 
 --- Reassembly ------------------------------------------------------------
@@ -241,6 +283,43 @@ function ip.sweepReassembly()
   end
 end
 
+-- Reassembles `fragBytes` (if it's part of a fragmented datagram) and
+-- dispatches the complete payload to whichever protocol handler is
+-- registered for hdr.protocol. Shared by ip.handleFrame's local-unicast
+-- and multicast branches -- verbatim lift of the original local-address
+-- handling, unaffected by which of those two cases called it since
+-- reassembly is keyed by srcIp+fragId regardless of dstIp.
+local function reassembleAndDispatch(hdr, fragBytes)
+  local complete = fragBytes
+  if hdr.fragFlags ~= 0 or hdr.fragOffset ~= 0 then
+    local key = reassemblyKey(hdr.srcIp, hdr.id)
+    local cfg = core.state.config or {}
+    local timeout = (cfg.ip and cfg.ip.reassemblyTimeoutSec) or 10
+    local entry = core.state.reassembly[key]
+    if not entry then
+      entry = { fragments = {}, protocol = hdr.protocol, srcIp = hdr.srcIp, dstIp = hdr.dstIp }
+      core.state.reassembly[key] = entry
+    end
+    entry.fragments[hdr.fragOffset] = fragBytes
+    entry.expiresAt = computer.uptime() + timeout
+    if (hdr.fragFlags & FRAG_MORE) == 0 then
+      entry.totalLength = hdr.fragOffset + hdr.length
+    end
+    complete = tryReassemble(entry)
+    if not complete then return end -- still waiting on more fragments
+    core.state.reassembly[key] = nil
+  end
+
+  core.state.stats.rxFrames = core.state.stats.rxFrames + 1
+  local handler = protocolHandlers[hdr.protocol]
+  if handler then
+    handler(hdr.srcIp, hdr.dstIp, complete)
+  else
+    core.log("debug", "ip: no handler for protocol %d, dropping", hdr.protocol)
+    core.state.stats.dropped = core.state.stats.dropped + 1
+  end
+end
+
 --- Receiving ------------------------------------------------------------
 
 -- Daemon-only entrypoint, called by ipstack.daemon after eth.unpackFrame
@@ -260,35 +339,16 @@ function ip.handleFrame(ifaceAddr, srcMac, packed)
     return
   end
 
-  if ip.isLocalAddress(hdr.dstIp) then
-    local complete = fragBytes
-    if hdr.fragFlags ~= 0 or hdr.fragOffset ~= 0 then
-      local key = reassemblyKey(hdr.srcIp, hdr.id)
-      local cfg = core.state.config or {}
-      local timeout = (cfg.ip and cfg.ip.reassemblyTimeoutSec) or 10
-      local entry = core.state.reassembly[key]
-      if not entry then
-        entry = { fragments = {}, protocol = hdr.protocol, srcIp = hdr.srcIp, dstIp = hdr.dstIp }
-        core.state.reassembly[key] = entry
-      end
-      entry.fragments[hdr.fragOffset] = fragBytes
-      entry.expiresAt = computer.uptime() + timeout
-      if (hdr.fragFlags & FRAG_MORE) == 0 then
-        entry.totalLength = hdr.fragOffset + hdr.length
-      end
-      complete = tryReassemble(entry)
-      if not complete then return end -- still waiting on more fragments
-      core.state.reassembly[key] = nil
-    end
+  -- Checked before isLocalAddress, and unconditionally: this is what
+  -- structurally guarantees a multicast packet can never fall through to
+  -- the forwarding branch below, regardless of local interface config.
+  if ip.isMulticast(hdr.dstIp) then
+    reassembleAndDispatch(hdr, fragBytes)
+    return
+  end
 
-    core.state.stats.rxFrames = core.state.stats.rxFrames + 1
-    local handler = protocolHandlers[hdr.protocol]
-    if handler then
-      handler(hdr.srcIp, hdr.dstIp, complete)
-    else
-      core.log("debug", "ip: no handler for protocol %d, dropping", hdr.protocol)
-      core.state.stats.dropped = core.state.stats.dropped + 1
-    end
+  if ip.isLocalAddress(hdr.dstIp) then
+    reassembleAndDispatch(hdr, fragBytes)
     return
   end
 

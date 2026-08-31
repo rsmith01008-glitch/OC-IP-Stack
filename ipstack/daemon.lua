@@ -17,12 +17,14 @@ local eth = require("ipstack.eth")
 local ip = require("ipstack.ip")
 local tcp = require("ipstack.tcp")
 local udp = require("ipstack.udp")
+local multicast = require("ipstack.multicast")
 
 -- Wire the transport layers into the IP layer's protocol dispatch table.
 -- Done once at module load (not inside start()) since it only registers
 -- callbacks and doesn't depend on the daemon actually running.
 ip.registerProtocolHandler(tcp.PROTO, tcp.handleSegment)
 ip.registerProtocolHandler(udp.PROTO, udp.handleDatagram)
+ip.registerProtocolHandler(multicast.PROTO, multicast.handleDatagram)
 
 local daemon = {}
 
@@ -146,9 +148,13 @@ function daemon.start()
   for address in component.list("modem") do
     attachInterface(address)
   end
-  for address in pairs(cfg.interfaces) do
+  for address, entry in pairs(cfg.interfaces) do
     if not core.state.interfaces[address] then
       core.log("warn", "daemon: configured modem %s is not present on this machine", address)
+    end
+    if entry.subnet == ip.MULTICAST_SUBNET then
+      core.log("warn", "daemon: interface %s configured with reserved multicast subnet %d (ip.MULTICAST_SUBNET); unicast traffic to this address will never be delivered",
+        address, ip.MULTICAST_SUBNET)
     end
   end
   if tableCount(core.state.interfaces) == 0 then
@@ -195,6 +201,7 @@ function daemon.stop()
   core.state.tcp.connections = {}
   core.state.tcp.listeners = {}
   core.state.udp.sockets = {}
+  core.state.multicast.sockets = {}
   core.state.running = false
   core.log("info", "ipstackd stopped")
   return true
