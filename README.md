@@ -23,8 +23,11 @@ stream. OC-IP-Stack adds:
   fragmentation/reassembly for payloads larger than a modem's
   `maxPacketSize()`.
 - **Transport layer**: `ipstack.tcp` (connection-oriented, handshake,
-  sequence/ack numbers, retransmission, ordered delivery) and
-  `ipstack.udp` (datagrams, port multiplexing).
+  sequence/ack numbers, retransmission, ordered delivery), `ipstack.udp`
+  (datagrams, port multiplexing), and `ipstack.multicast` (datagrams sent
+  to a joined group instead of a single address, filtered to members in
+  software since OC modems have no hardware multicast filtering -- reuses
+  `ipstack.udp`'s port-multiplexed header format).
 - **Public API** (`ipstack.socket`): the only module a program should
   `require()` directly.
 
@@ -93,6 +96,11 @@ Find a modem's component address in-game with:
 for address in component.list("modem") do print(address) end
 ```
 
+Subnet `255` is reserved for multicast groups (see "Using the library"
+below) -- don't assign a real interface to it; the daemon warns at
+startup if you do, but that interface's own address will never be
+reachable via unicast.
+
 A node with two or more modems and `ip.forwarding = true` acts as a
 relay/gateway between subnets; other nodes reach non-local subnets via
 `staticRoutes` or `defaultGateway`. Restart after editing:
@@ -130,6 +138,18 @@ u:bind(9000)
 u:sendto("1.10", 9001, "ping")
 local data, srcIp, srcPort = u:receivefrom(5)
 u:close()
+
+-- Multicast: group addresses are ordinary "255.x" addresses (subnet 255
+-- is reserved for groups, host 0-255 is the group id). Sending does not
+-- require having joined the group; one socket can join at most one group
+-- at a time (call :leave() to switch).
+local m = socket.multicast()
+m:join("255.5")
+m:bind(9100)
+m:send("255.5", 9100, "hello group")
+local mdata, msrcIp, msrcPort = m:receivefrom(5)
+m:leave()
+m:close()
 ```
 
 Every `ipstack.socket` call checks that `ipstackd` is running first and
@@ -146,7 +166,7 @@ rc ipstackd status        -- running/stopped
 ipstack-ctl status        -- interfaces, MTU, tx/rx/dropped stats
 ipstack-ctl arp           -- ARP cache
 ipstack-ctl route         -- routing table
-ipstack-ctl conn          -- TCP connections/listeners, UDP sockets
+ipstack-ctl conn          -- TCP connections/listeners, UDP/multicast sockets
 ipstack-ctl log [n]       -- last n log lines (default 20)
 ```
 
@@ -161,12 +181,19 @@ focused for an OpenComputers-scale network:
   retransmit only) and no TCP options (no MSS negotiation, window
   scaling, SACK, timestamps).
 - No IPv6 or true 4-octet IPv4 addressing -- a 2-octet `subnet.host`
-  address space (255 subnets x 254 hosts) is used instead.
+  address space (254 unicast subnets x 254 hosts, plus subnet 255
+  reserved for multicast groups) is used instead.
 - No dynamic routing protocol, no CIDR -- routes are static config only.
 - No DHCP-equivalent address assignment -- static config only, with a
   gratuitous-ARP conflict warning at daemon start.
 - No DNS-equivalent -- only a static `hosts` table in `/etc/ipstack.cfg`.
 - No ICMP suite, NAT, firewalling, encryption, or raw sockets.
+- No multicast membership-signaling protocol (no IGMP-equivalent) --
+  `join`/`leave` are local software state only, never sent on the wire.
+- No multicast forwarding across a relay node's other interfaces, even
+  with `ip.forwarding = true` -- a multicast flood never leaves the
+  broadcast domain it originated on, avoiding loop-prevention complexity
+  (same minimalism as the no-dynamic-routing-protocol decision above).
 
 ## Testing
 
@@ -176,5 +203,7 @@ APIs (`component.modem`, `event`, etc.) outside the mod. Before relying on
 this in a world, exercise it on two or more real (or
 [OCEmu](https://github.com/zenith391/OCEmu)-emulated) OpenComputers
 machines: ARP resolution between two nodes, a UDP echo round trip, a full
-TCP connect/send/receive/close cycle, and (with a third relay node)
-cross-subnet routing through a gateway.
+TCP connect/send/receive/close cycle, a multicast send received by two+
+joined nodes but not by an unjoined one, and (with a third relay node)
+cross-subnet routing through a gateway (also confirming a multicast send
+is *not* relayed across it).

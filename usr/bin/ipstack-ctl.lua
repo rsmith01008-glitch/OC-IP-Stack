@@ -99,6 +99,15 @@ local function cmdConn()
     printf("  #%d  port=%s  queued=%d", id, tostring(sock.port), #sock.recvQueue)
   end
   if not any then print("  (none)") end
+
+  print("Multicast sockets:")
+  any = false
+  for id, sock in pairs(core.state.multicast.sockets) do
+    any = true
+    printf("  #%d  group=%s  port=%s  queued=%d",
+      id, sock.group and util.ipToString(sock.group) or "(none)", tostring(sock.port), #sock.recvQueue)
+  end
+  if not any then print("  (none)") end
 end
 
 local function cmdLog()

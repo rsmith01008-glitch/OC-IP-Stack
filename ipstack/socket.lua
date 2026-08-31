@@ -11,8 +11,10 @@
 -- error rather than blocking forever.
 local core = require("ipstack.core")
 local util = require("ipstack.util")
+local ip = require("ipstack.ip")
 local tcp = require("ipstack.tcp")
 local udp = require("ipstack.udp")
+local multicast = require("ipstack.multicast")
 
 local socket = {}
 
@@ -202,6 +204,81 @@ function UdpMeta:close()
   local ok, err = core.requireRunning()
   if not ok then return nil, err end
   return udp.close(self.id)
+end
+
+--- Multicast sockets ------------------------------------------------------------
+
+-- Multicast group addresses are ordinary addresses in the same
+-- "subnet.host" space as unicast (subnet 255 == ip.MULTICAST_SUBNET is
+-- reserved for it) -- so they resolve through the exact same `resolveIp`
+-- used by socket.connect/UdpMeta:sendto, with one extra check layered on
+-- top: the resolved address must actually be a multicast one.
+local function resolveMulticastTarget(target)
+  local groupIp, rerr = resolveIp(target)
+  if not groupIp then return nil, rerr end
+  if not ip.isMulticast(groupIp) then
+    return nil, "not a multicast group address: " .. util.ipToString(groupIp)
+  end
+  return groupIp
+end
+
+local McastMeta = {}
+McastMeta.__index = McastMeta
+
+function socket.multicast()
+  local ok, err = core.requireRunning()
+  if not ok then return nil, err end
+  return setmetatable({ id = multicast.open() }, McastMeta)
+end
+
+-- Joins target's group. One group per socket -- call :leave() first to
+-- switch groups.
+function McastMeta:join(target)
+  local ok, err = core.requireRunning()
+  if not ok then return nil, err end
+  local groupIp, rerr = resolveMulticastTarget(target)
+  if not groupIp then return nil, rerr end
+  return multicast.join(self.id, groupIp)
+end
+
+function McastMeta:leave()
+  local ok, err = core.requireRunning()
+  if not ok then return nil, err end
+  return multicast.leave(self.id)
+end
+
+function McastMeta:bind(port)
+  local ok, err = core.requireRunning()
+  if not ok then return nil, err end
+  return multicast.bind(self.id, port)
+end
+
+-- Sends to target's group. Does NOT require having joined it first.
+function McastMeta:send(target, port, data)
+  local ok, err = core.requireRunning()
+  if not ok then return nil, err end
+  local groupIp, rerr = resolveMulticastTarget(target)
+  if not groupIp then return nil, rerr end
+  return multicast.send(self.id, groupIp, port, data)
+end
+
+-- Blocks up to timeoutSec waiting for a datagram sent to the joined
+-- group. Returns data, srcIp (string), srcPort, or nil, "timeout".
+function McastMeta:receivefrom(timeoutSec)
+  local ok, err = core.requireRunning()
+  if not ok then return nil, err end
+
+  core.waitUntil(function() return multicast.hasPending(self.id) end, timeoutSec)
+
+  local data, srcIp, srcPort = multicast.receivefrom(self.id)
+  if not data then return nil, "timeout" end
+  return data, util.ipToString(srcIp), srcPort
+end
+
+function McastMeta:close()
+  local ok, err = core.requireRunning()
+  if not ok then return nil, err end
+  return multicast.close(self.id)
 end
 
 return socket

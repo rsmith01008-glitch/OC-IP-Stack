@@ -10,6 +10,8 @@
 {
   -- Modem component address -> this node's address on that link.
   -- Find modem addresses with: for a in component.list("modem") do print(a) end
+  -- Subnet 255 is reserved for multicast groups (ipstack.multicast) --
+  -- don't assign a real interface to it.
   interfaces = {
     -- ["3a1e2b7c-....-...."] = { subnet = 1, host = 5 },
   },
@@ -51,8 +53,8 @@
   },
 
   udp = {
-    maxDatagram = 32768,  -- reject a single sendto() larger than this
-    recvQueueMax = 64,    -- per-socket queued-datagram cap (drop-oldest)
+    maxDatagram = 32768,  -- reject a single sendto() larger than this (also applies to ipstack.multicast sends)
+    recvQueueMax = 64,    -- per-socket queued-datagram cap, drop-oldest (also applies to ipstack.multicast)
   },
 
   eth = {
