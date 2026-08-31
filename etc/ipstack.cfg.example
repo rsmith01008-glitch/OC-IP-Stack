@@ -1,0 +1,70 @@
+-- OC-IP-Stack configuration.
+--
+-- Copy this file to /etc/ipstack.cfg and edit it (install.lua does this
+-- for you interactively when possible). This is a plain Lua table literal
+-- read with serialization.unserialize, so it must stay valid Lua syntax --
+-- comments are fine, but every value needs a trailing comma or correct
+-- table syntax. Any key you omit falls back to ipstack.config.DEFAULTS.
+--
+-- Restart the daemon after editing: rc ipstackd restart
+{
+  -- Modem component address -> this node's address on that link.
+  -- Find modem addresses with: for a in component.list("modem") do print(a) end
+  interfaces = {
+    -- ["3a1e2b7c-....-...."] = { subnet = 1, host = 5 },
+  },
+
+  -- Where to send anything not covered by a direct or static route.
+  -- Leave nil (comment out) on a node with no route off its own subnet.
+  -- defaultGateway = { subnet = 1, host = 1 },
+
+  -- Extra routes for reaching subnets beyond an immediate neighbor.
+  staticRoutes = {
+    -- { subnet = 2, viaGateway = { subnet = 1, host = 1 } },
+  },
+
+  -- Trivial static name -> "subnet.host" table, looked up locally only by
+  -- socket.resolve(). No queries, no broadcasts -- edit this by hand.
+  hosts = {
+    -- ["file-server"] = "1.10",
+  },
+
+  arp = {
+    ttl = 60,               -- seconds an ARP cache entry stays valid
+    requestTimeoutSec = 3,  -- seconds to wait for a reply per attempt
+    requestRetries = 3,     -- attempts before "host unreachable"
+  },
+
+  ip = {
+    defaultTtl = 32,             -- hops before a forwarded packet is dropped
+    reassemblyTimeoutSec = 10,   -- seconds to wait for missing fragments
+    forwarding = false,          -- set true on a multi-interface relay/gateway node
+  },
+
+  tcp = {
+    rtoSec = 1,             -- initial retransmit timeout
+    rtoMaxSec = 8,          -- retransmit backoff cap
+    maxRetries = 8,         -- retries before a connection is reset as timed out
+    defaultWindow = 4096,   -- bytes; fixed receive window, no dynamic scaling
+    idleTimeoutSec = 120,   -- reap a connection with no activity for this long
+    timeWaitSec = 5,        -- linger after close before a connection is freed
+  },
+
+  udp = {
+    maxDatagram = 32768,  -- reject a single sendto() larger than this
+    recvQueueMax = 64,    -- per-socket queued-datagram cap (drop-oldest)
+  },
+
+  eth = {
+    port = 4790,  -- modem port used for all ipstack traffic
+  },
+
+  wireless = {
+    strength = 400,  -- signal strength applied to wireless modems only
+  },
+
+  log = {
+    level = "info",
+    ringSize = 200,  -- number of recent log lines kept for `ipstack-ctl log`
+  },
+}
