@@ -22,6 +22,7 @@
 -- at load time from ipstack.daemon (which is free to require everything),
 -- and ip.handleFrame dispatches to whichever handler is registered for the
 -- packet's protocol number.
+local computer = require("computer")
 local core = require("ipstack.core")
 local util = require("ipstack.util")
 local eth = require("ipstack.eth")

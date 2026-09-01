@@ -1,4 +1,6 @@
 -- ipstack.util: small shared helpers used across every layer.
+local computer = require("computer")
+
 local util = {}
 
 -- Internet-checksum-style 16 bit ones'-complement sum over a byte string.
@@ -55,7 +57,7 @@ function util.makeLogger(sink, ringSize)
     local ok, msg = pcall(string.format, fmt, ...)
     if not ok then msg = fmt end
     local entry = {
-      time = computer and computer.uptime and computer.uptime() or os.time(),
+      time = computer.uptime(),
       level = level,
       message = msg,
     }

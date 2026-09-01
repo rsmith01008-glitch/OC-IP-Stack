@@ -1,6 +1,7 @@
 -- ipstack-ctl: small CLI for inspecting a running ipstackd daemon's state.
 -- Reads ipstack.core's shared state directly (no IPC needed -- see
 -- ipstack/core.lua for why require() caching makes that safe).
+local computer = require("computer")
 local core = require("ipstack.core")
 local ip = require("ipstack.ip")
 local util = require("ipstack.util")

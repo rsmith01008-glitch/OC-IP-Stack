@@ -8,6 +8,7 @@
 -- which coroutine registered them, so no persistent background thread is
 -- needed for correctness.
 local component = require("component")
+local computer = require("computer")
 local event = require("event")
 
 local core = require("ipstack.core")

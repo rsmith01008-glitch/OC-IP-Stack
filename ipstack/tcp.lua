@@ -12,6 +12,7 @@
 -- Sequence numbers are treated as plain (non-wrapping) 32-bit counters --
 -- wraparound after 4GiB on one connection is not handled, which is an
 -- acceptable simplification at OpenComputers scale.
+local computer = require("computer")
 local core = require("ipstack.core")
 local util = require("ipstack.util")
 local ip = require("ipstack.ip")
