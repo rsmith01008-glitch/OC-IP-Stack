@@ -6,6 +6,7 @@
 -- cycle, since ip.lua requires eth.lua to actually transmit). Dispatch from
 -- a decoded frame's ethertype to the IP layer or to eth.arp is done by the
 -- caller (ipstack.daemon), which is free to require both.
+local computer = require("computer")
 local core = require("ipstack.core")
 local util = require("ipstack.util")
 

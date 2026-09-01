@@ -9,6 +9,7 @@
 -- by an explicit or default timeout via core.waitUntil, so an
 -- unresponsive-but-running daemon/peer also degrades to a typed "timeout"
 -- error rather than blocking forever.
+local computer = require("computer")
 local core = require("ipstack.core")
 local util = require("ipstack.util")
 local ip = require("ipstack.ip")

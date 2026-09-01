@@ -15,6 +15,7 @@
 -- coroutines are cooperative -- only one runs at a time, switching only at
 -- explicit yield points -- so as long as that rule holds there is no
 -- concurrent-mutation hazard and no locking is needed.
+local computer = require("computer")
 local util = require("ipstack.util")
 
 local core = {}
