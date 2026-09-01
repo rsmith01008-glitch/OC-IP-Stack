@@ -15,6 +15,7 @@ local ip = require("ipstack.ip")
 local tcp = require("ipstack.tcp")
 local udp = require("ipstack.udp")
 local multicast = require("ipstack.multicast")
+local stream = require("ipstack.stream")
 
 local socket = {}
 
@@ -279,6 +280,77 @@ function McastMeta:close()
   local ok, err = core.requireRunning()
   if not ok then return nil, err end
   return multicast.close(self.id)
+end
+
+--- Stream sockets (fixed-cadence, best-effort periodic multicast; see
+--- ipstack.stream's header for what this adds over plain multicast) ----
+
+local StreamMeta = {}
+StreamMeta.__index = StreamMeta
+
+function socket.stream()
+  local ok, err = core.requireRunning()
+  if not ok then return nil, err end
+  return setmetatable({ id = stream.open() }, StreamMeta)
+end
+
+function StreamMeta:join(target)
+  local ok, err = core.requireRunning()
+  if not ok then return nil, err end
+  local groupIp, rerr = resolveMulticastTarget(target)
+  if not groupIp then return nil, rerr end
+  return stream.join(self.id, groupIp)
+end
+
+function StreamMeta:leave()
+  local ok, err = core.requireRunning()
+  if not ok then return nil, err end
+  return stream.leave(self.id)
+end
+
+function StreamMeta:bind(port)
+  local ok, err = core.requireRunning()
+  if not ok then return nil, err end
+  return stream.bind(self.id, port)
+end
+
+-- Starts publishing to target's group:port at ratePerSec samples/sec
+-- (clamped to config.stream.maxRatePerSec), calling `payloadFn()` fresh
+-- each time a sample is due. The daemon drives the cadence -- this call
+-- returns immediately, it does not block or loop.
+function StreamMeta:startPublishing(target, port, ratePerSec, payloadFn)
+  local ok, err = core.requireRunning()
+  if not ok then return nil, err end
+  local groupIp, rerr = resolveMulticastTarget(target)
+  if not groupIp then return nil, rerr end
+  return stream.startPublishing(self.id, groupIp, port, ratePerSec, payloadFn, computer.uptime())
+end
+
+function StreamMeta:stopPublishing()
+  local ok, err = core.requireRunning()
+  if not ok then return nil, err end
+  return stream.stopPublishing(self.id)
+end
+
+-- Blocks up to timeoutSec waiting for a sample sent to the joined group.
+-- Returns data, srcIp (string), srcPort, seq, gap, resetDetected, or
+-- nil, "timeout". `gap` is how many samples were missed before this one;
+-- see ipstack.stream.computeGap's header comment for `resetDetected`.
+function StreamMeta:receivefrom(timeoutSec)
+  local ok, err = core.requireRunning()
+  if not ok then return nil, err end
+
+  core.waitUntil(function() return stream.hasPending(self.id) end, timeoutSec)
+
+  local data, srcIp, srcPort, seq, gap, resetDetected = stream.receivefrom(self.id)
+  if not data then return nil, "timeout" end
+  return data, util.ipToString(srcIp), srcPort, seq, gap, resetDetected
+end
+
+function StreamMeta:close()
+  local ok, err = core.requireRunning()
+  if not ok then return nil, err end
+  return stream.close(self.id)
 end
 
 return socket

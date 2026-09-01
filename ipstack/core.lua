@@ -42,6 +42,10 @@ core.state = {
   multicast = {
     sockets = {},
   },
+  -- [socketId] = { group=, port=, recvQueue={}, lastSeq=, publishing=nil|{...}, closed=false }
+  stream = {
+    sockets = {},
+  },
   log = {},
   stats = { txFrames = 0, rxFrames = 0, dropped = 0 },
 }
@@ -64,9 +68,10 @@ function core.newSocketId()
 end
 
 -- Allocates the next ephemeral port, skipping any already in use by an
--- active UDP socket, multicast socket, or TCP connection/listener --
--- shared ephemeral port space across all three, since multicast reuses
--- UDP's exact port-multiplexing concept. Wraps 49152-65535.
+-- active UDP socket, multicast socket, stream socket, or TCP connection/
+-- listener -- shared ephemeral port space across all four, since
+-- multicast and stream both reuse UDP's exact port-multiplexing concept.
+-- Wraps 49152-65535.
 function core.allocEphemeralPort()
   local start = core.state.tcp.nextEphemeralPort
   local port = start
@@ -84,6 +89,11 @@ function core.allocEphemeralPort()
     end
     if not inUse then
       for _, sock in pairs(core.state.multicast.sockets) do
+        if sock.port == port then inUse = true break end
+      end
+    end
+    if not inUse then
+      for _, sock in pairs(core.state.stream.sockets) do
         if sock.port == port then inUse = true break end
       end
     end

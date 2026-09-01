@@ -53,8 +53,14 @@
   },
 
   udp = {
-    maxDatagram = 32768,  -- reject a single sendto() larger than this (also applies to ipstack.multicast sends)
+    maxDatagram = 32768,  -- reject a single sendto() larger than this (also applies to ipstack.multicast/ipstack.stream sends)
     recvQueueMax = 64,    -- per-socket queued-datagram cap, drop-oldest (also applies to ipstack.multicast)
+  },
+
+  stream = {
+    driverIntervalSec = 0.05,  -- how often the daemon checks every ipstack.stream publisher for a due sample
+    maxRatePerSec = 20,        -- publish-rate ceiling per stream (OC's own tick rate; higher is silently clamped)
+    recvQueueMax = 64,         -- per-socket queued-sample cap, drop-oldest
   },
 
   eth = {
