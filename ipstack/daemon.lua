@@ -18,6 +18,7 @@ local ip = require("ipstack.ip")
 local tcp = require("ipstack.tcp")
 local udp = require("ipstack.udp")
 local multicast = require("ipstack.multicast")
+local stream = require("ipstack.stream")
 
 -- Wire the transport layers into the IP layer's protocol dispatch table.
 -- Done once at module load (not inside start()) since it only registers
@@ -25,6 +26,7 @@ local multicast = require("ipstack.multicast")
 ip.registerProtocolHandler(tcp.PROTO, tcp.handleSegment)
 ip.registerProtocolHandler(udp.PROTO, udp.handleDatagram)
 ip.registerProtocolHandler(multicast.PROTO, multicast.handleDatagram)
+ip.registerProtocolHandler(stream.PROTO, stream.handleDatagram)
 
 local daemon = {}
 
@@ -33,6 +35,7 @@ local ETH_OVERHEAD = 78
 -- Kept as module-local upvalues (not stored in core.state) so stop() can
 -- unregister the exact same function/timer references it registered.
 local tickTimerId = nil
+local streamTimerId = nil
 
 local function tableCount(t)
   local n = 0
@@ -130,6 +133,20 @@ local function safeTick()
   end
 end
 
+-- Drives every open stream.lua publisher (see stream.drivePublishers).
+-- Runs on its own timer, independent of safeTick, at config.stream's
+-- (typically much faster) driverIntervalSec -- keeping it separate from
+-- safeTick's 1-second housekeeping cadence, rather than folding it in
+-- there, is what actually lets a stream publish faster than 1/sec.
+local function safeStreamTick()
+  local ok, err = pcall(function()
+    stream.drivePublishers(computer.uptime())
+  end)
+  if not ok then
+    core.log("error", "daemon: stream driver tick error: %s", tostring(err))
+  end
+end
+
 -- Idempotent: calling start() while already running is a no-op success,
 -- so `rc ipstackd start` is safe to run more than once.
 function daemon.start()
@@ -167,6 +184,7 @@ function daemon.start()
   event.listen("component_added", safeOnComponentChange)
   event.listen("component_removed", safeOnComponentChange)
   tickTimerId = event.timer(1, safeTick, math.huge)
+  streamTimerId = event.timer(cfg.stream.driverIntervalSec, safeStreamTick, math.huge)
 
   eth.arp.announceAll()
 
@@ -188,6 +206,10 @@ function daemon.stop()
     event.cancel(tickTimerId)
     tickTimerId = nil
   end
+  if streamTimerId then
+    event.cancel(streamTimerId)
+    streamTimerId = nil
+  end
 
   for _, iface in pairs(core.state.interfaces) do
     if iface.proxy then
@@ -202,6 +224,7 @@ function daemon.stop()
   core.state.tcp.listeners = {}
   core.state.udp.sockets = {}
   core.state.multicast.sockets = {}
+  core.state.stream.sockets = {}
   core.state.running = false
   core.log("info", "ipstackd stopped")
   return true

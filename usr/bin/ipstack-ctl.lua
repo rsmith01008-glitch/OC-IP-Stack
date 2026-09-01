@@ -108,6 +108,21 @@ local function cmdConn()
       id, sock.group and util.ipToString(sock.group) or "(none)", tostring(sock.port), #sock.recvQueue)
   end
   if not any then print("  (none)") end
+
+  print("Stream sockets:")
+  any = false
+  for id, sock in pairs(core.state.stream.sockets) do
+    any = true
+    local pubDesc = "not publishing"
+    if sock.publishing then
+      pubDesc = string.format("publishing group=%s port=%d rate=%.1f/s seq=%d",
+        util.ipToString(sock.publishing.groupIp), sock.publishing.dstPort,
+        sock.publishing.ratePerSec, sock.publishing.seq)
+    end
+    printf("  #%d  group=%s  port=%s  queued=%d  %s",
+      id, sock.group and util.ipToString(sock.group) or "(none)", tostring(sock.port), #sock.recvQueue, pubDesc)
+  end
+  if not any then print("  (none)") end
 end
 
 local function cmdLog()

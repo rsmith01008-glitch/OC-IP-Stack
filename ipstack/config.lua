@@ -39,6 +39,19 @@ config.DEFAULTS = {
     maxDatagram = 32768,
     recvQueueMax = 64,
   },
+  stream = {
+    -- How often the daemon checks every open stream.lua publisher for a
+    -- due sample. Independent of maxRatePerSec -- this just needs to be
+    -- fine-grained enough to hit maxRatePerSec's cadence accurately.
+    driverIntervalSec = 0.05,
+    -- Publish rate ceiling, in samples/sec, for any one
+    -- stream.startPublishing() registration -- OC's own tick rate (~20
+    -- Hz); publishing faster is meaningless (nothing produces new samples
+    -- that fast) and would just waste modem sends. A rate above this is
+    -- silently clamped, not rejected.
+    maxRatePerSec = 20,
+    recvQueueMax = 64,
+  },
   eth = {
     port = 4790,
   },
