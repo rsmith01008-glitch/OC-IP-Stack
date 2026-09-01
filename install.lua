@@ -15,7 +15,7 @@ local filesystem = require("filesystem")
 local serialization = require("serialization")
 local shell = require("shell")
 
-local RAW_BASE = "https://raw.githubusercontent.com/rsmith01008-glitch/OC-IP-Stack/main/"
+local RAW_BASE = "https://raw.githubusercontent.com/rsmith01008-glitch/OC-IP-Stack/refs/heads/main/"
 
 -- Kept as an explicit list (rather than derived from programs.cfg's
 -- directory-shorthand entry) because the internet-fetch path has no way
