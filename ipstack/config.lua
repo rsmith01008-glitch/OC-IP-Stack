@@ -3,6 +3,7 @@
 -- frequency file) rather than the packed binary format used for wire
 -- headers elsewhere in this stack.
 local serialization = require("serialization")
+local filesystem = require("filesystem")
 
 local config = {}
 
@@ -111,14 +112,47 @@ end
 
 -- Writes `tbl` to `path` (defaults to /etc/ipstack.cfg) via
 -- serialization.serialize. Returns true, or nil+err on failure.
+--
+-- Written to a temp file first, then verified (byte-for-byte match plus a
+-- successful unserialize round-trip) before being moved into place with
+-- filesystem.rename. An interrupted write (I/O error, low drive space, a
+-- save/chunk-unload) can otherwise leave a truncated, unparsable file --
+-- since `path` may already hold a working config from a previous save,
+-- writing straight into it (which "w" mode truncates immediately) would
+-- risk replacing a good config with a broken one and no way to tell.
+-- Going through a temp file means a failed write only ever leaves the
+-- temp file broken; `path` itself is untouched until we know the new
+-- content is good.
 function config.save(tbl, path)
   path = path or config.DEFAULT_PATH
-  local f, openErr = io.open(path, "w")
+  local tmpPath = path .. ".tmp"
+  local content = serialization.serialize(tbl, true)
+
+  local f, openErr = io.open(tmpPath, "w")
   if not f then
-    return nil, "could not open " .. path .. " for writing: " .. tostring(openErr)
+    return nil, "could not open " .. tmpPath .. " for writing: " .. tostring(openErr)
   end
-  f:write(serialization.serialize(tbl, true))
+  local writeOk, writeErr = pcall(function() f:write(content) end)
   f:close()
+  if not writeOk then
+    return nil, "write to " .. tmpPath .. " failed: " .. tostring(writeErr)
+  end
+
+  local rf, reopenErr = io.open(tmpPath, "r")
+  if not rf then
+    return nil, "wrote " .. tmpPath .. " but could not reopen it to verify: " .. tostring(reopenErr)
+  end
+  local written = rf:read("*a")
+  rf:close()
+  if written ~= content or not pcall(serialization.unserialize, written) then
+    return nil, "write to " .. tmpPath .. " produced a corrupt/truncated file -- " ..
+      "left in place for inspection, " .. path .. " was not touched"
+  end
+
+  local moveOk, moveErr = filesystem.rename(tmpPath, path)
+  if not moveOk then
+    return nil, "verified write but could not move " .. tmpPath .. " into place at " .. path .. ": " .. tostring(moveErr)
+  end
   return true
 end
 
