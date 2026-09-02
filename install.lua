@@ -114,8 +114,30 @@ local function writeFile(dst, content)
   filesystem.makeDirectory(filesystem.path(dst))
   local f, err = io.open(dst, "w")
   if not f then return nil, "could not open " .. dst .. ": " .. tostring(err) end
-  f:write(content)
+  local writeOk, writeErr = pcall(function() f:write(content) end)
   f:close()
+  if not writeOk then
+    return nil, "write to " .. dst .. " failed: " .. tostring(writeErr)
+  end
+
+  -- Opening in "w" mode truncates immediately; a write that's interrupted
+  -- partway (an OC filesystem-component I/O error, a save/chunk-unload,
+  -- low drive space) can leave a partial file on disk with io.open/f:write
+  -- reporting no error. Read it back and compare -- this is the only way
+  -- to actually know the bytes landed, and it's what turns a silently
+  -- truncated /etc/ipstack.cfg (which then fails to parse and leaves the
+  -- daemon running with no configured interfaces) into a loud install-time
+  -- failure instead.
+  local rf, reopenErr = io.open(dst, "r")
+  if not rf then
+    return nil, "wrote " .. dst .. " but could not reopen it to verify: " .. tostring(reopenErr)
+  end
+  local written = rf:read("*a")
+  rf:close()
+  if written ~= content then
+    return nil, "wrote " .. dst .. " but its contents don't match what was sent (" ..
+      #written .. "/" .. #content .. " bytes) -- likely truncated"
+  end
   return true
 end
 

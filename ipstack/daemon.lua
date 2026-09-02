@@ -150,8 +150,25 @@ end
 
 -- Idempotent: calling start() while already running is a no-op success,
 -- so `rc ipstackd start` is safe to run more than once.
+--
+-- Returns true, warnings -- warnings is a newline-joined string of every
+-- startup-time problem worth a human's attention (unparsable config,
+-- absent modems, a reserved-subnet misconfiguration, zero usable
+-- interfaces), or nil if there weren't any. Every one of these is also
+-- still logged individually via core.log (so ipstack-ctl log keeps
+-- working), but core.log only appends to an in-memory ring buffer with no
+-- stdout output -- returning them too lets rc.d/ipstackd.lua print them
+-- directly, so `rc ipstackd start` doesn't silently come up with, say, no
+-- configured interfaces and no visible sign anything is wrong.
 function daemon.start()
   if core.isRunning() then return true end
+
+  local warnings = {}
+  local function warn(fmt, ...)
+    local msg = string.format(fmt, ...)
+    core.log("warn", "%s", msg)
+    table.insert(warnings, msg)
+  end
 
   math.randomseed(math.floor((computer.uptime() * 1000)) % 2147483647)
 
@@ -159,7 +176,7 @@ function daemon.start()
   core.state.config = cfg
   core.log = util.makeLogger(core.state.log, cfg.log.ringSize)
   if cfgErr then
-    core.log("warn", "daemon: %s (using built-in defaults)", cfgErr)
+    warn("daemon: %s (using built-in defaults)", cfgErr)
   end
 
   core.state.interfaces = {}
@@ -168,15 +185,15 @@ function daemon.start()
   end
   for address, entry in pairs(cfg.interfaces) do
     if not core.state.interfaces[address] then
-      core.log("warn", "daemon: configured modem %s is not present on this machine", address)
+      warn("daemon: configured modem %s is not present on this machine", address)
     end
     if entry.subnet == ip.MULTICAST_SUBNET then
-      core.log("warn", "daemon: interface %s configured with reserved multicast subnet %d (ip.MULTICAST_SUBNET); unicast traffic to this address will never be delivered",
+      warn("daemon: interface %s configured with reserved multicast subnet %d (ip.MULTICAST_SUBNET); unicast traffic to this address will never be delivered",
         address, ip.MULTICAST_SUBNET)
     end
   end
   if tableCount(core.state.interfaces) == 0 then
-    core.log("warn", "daemon: no local interfaces configured/present; sends will fail until /etc/ipstack.cfg is fixed")
+    warn("daemon: no local interfaces configured/present; sends will fail until /etc/ipstack.cfg is fixed")
   end
 
   ip.rebuildRouteTable()
@@ -191,7 +208,7 @@ function daemon.start()
 
   core.state.running = true
   core.log("info", "ipstackd started with %d interface(s)", tableCount(core.state.interfaces))
-  return true
+  return true, (#warnings > 0 and table.concat(warnings, "\n") or nil)
 end
 
 -- Unregisters everything start() registered, closes modem ports, and

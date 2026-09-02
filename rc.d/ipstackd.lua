@@ -10,7 +10,11 @@
 local daemon = require("ipstack.daemon")
 
 function start()
-  return daemon.start()
+  local ok, warnings = daemon.start()
+  if ok and warnings then
+    print("ipstackd: " .. warnings)
+  end
+  return ok
 end
 
 function stop()
